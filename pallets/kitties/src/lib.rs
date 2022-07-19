@@ -17,19 +17,22 @@ mod benchmarking;
 #[frame_support::pallet]
 pub mod pallet {
 	use frame_support::pallet_prelude::*;
+	use frame_support::traits::{ Randomness, Time, Get };
 	use frame_system::pallet_prelude::*;
-  use frame_support::inherent::Vec;
+	// use frame_support::inherent::Vec;
 
-	pub type KittyDna = Vec<u8>;
+	pub type KittyDna<T> = <T as frame_system::Config>::Hash;
 	pub type KittyPrice = u32;
+	pub type MomentOf<T> = <<T as Config>::Time as Time>::Moment;
 
 	#[derive(Encode, Decode, Default, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Kitty<T: Config> {
-		dna: KittyDna,
+		dna: KittyDna<T>,
 		owner: T::AccountId,
 		price: KittyPrice,
 		gender: Gender,
+		created_date: MomentOf<T>
 	}
 
 	#[derive(Encode, Decode, TypeInfo)]
@@ -49,6 +52,12 @@ pub mod pallet {
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+
+		type Randomness: Randomness<Self::Hash, Self::BlockNumber>;
+
+		type Time: Time;
+
+		type MaxOwned: Get<u32>;
 	}
 
 	#[pallet::pallet]
@@ -62,11 +71,11 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn kitties)]
-	pub type Kitties<T: Config> = StorageMap<_, Twox64Concat, KittyDna, Kitty<T>>;
+	pub type Kitties<T: Config> = StorageMap<_, Twox64Concat, KittyDna<T>, Kitty<T>>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn kitties_owned)]
-	pub type KittiesOwned<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, Vec<KittyDna>, ValueQuery>;
+	pub type KittiesOwned<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, BoundedVec<KittyDna<T>, T::MaxOwned>, ValueQuery>;
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/v3/runtime/events-and-errors
@@ -75,8 +84,9 @@ pub mod pallet {
 	pub enum Event<T: Config> {
 		/// Event documentation should end with an array that provides descriptive names for event
 		/// parameters. [something, who]
-		KittyCreated(T::AccountId, KittyDna),
-		KittyTransferred(T::AccountId, T::AccountId, KittyDna)
+		KittyCreated(T::AccountId, KittyDna<T>),
+		KittyTransferred(T::AccountId, T::AccountId, KittyDna<T>),
+		TestHash(u8)
 	}
 
 	// Errors inform users that something went wrong.
@@ -89,7 +99,8 @@ pub mod pallet {
 		KittyNoExist,
 		TransferToYourself,
 		DnaAlreadyExist,
-		NotKittyOwner
+		NotKittyOwner,
+		ExceedMaxKitty
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -102,12 +113,14 @@ pub mod pallet {
 		// + Giới tính dựa vào độ dài của dna
 
 		#[pallet::weight(100)]
-		pub fn create_kitty(origin: OriginFor<T>, dna: KittyDna, price: KittyPrice) -> DispatchResult {
+		pub fn create_kitty(origin: OriginFor<T>, price: KittyPrice) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
-			ensure!(Self::kitties(&dna).is_none(), <Error<T>>::DnaAlreadyExist);
+			ensure!(!Self::is_exceed_max_kitty(&who), <Error<T>>::ExceedMaxKitty);
 
-			Self::mint(&who, &dna, price);
+			// ensure!(Self::kitties(&dna).is_none(), <Error<T>>::DnaAlreadyExist);
+
+			let dna = Self::mint(&who, price)?;
 
 			Self::deposit_event(Event::KittyCreated(who, dna));
 
@@ -115,14 +128,16 @@ pub mod pallet {
 		}
 
 		#[pallet::weight(100)]
-		pub fn transfer(origin: OriginFor<T>, to: T::AccountId, dna: KittyDna) -> DispatchResult {
+		pub fn transfer(origin: OriginFor<T>, to: T::AccountId, dna: KittyDna<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
 			ensure!(Self::is_kitty_owner(&who, &dna)?, <Error<T>>::NotKittyOwner);
 
 			ensure!(who != to, <Error<T>>::TransferToYourself);
 
-			Self::transfer_kitty_to(&to, &dna);
+			ensure!(!Self::is_exceed_max_kitty(&to), <Error<T>>::ExceedMaxKitty);
+
+			Self::transfer_kitty_to(&to, &dna)?;
 
 			Self::deposit_event(Event::KittyTransferred(who, to, dna));
 
@@ -131,32 +146,47 @@ pub mod pallet {
 	}
 
 	impl<T: Config> Pallet<T> {
-		pub fn get_gender(dna: &KittyDna) -> Gender {
-			if dna.len() % 2 == 0 {
+		pub fn generate_dna() -> T::Hash {
+			T::Randomness::random(&b"dna"[..]).0
+		}
+
+		pub fn is_exceed_max_kitty(owner: &T::AccountId) -> bool {
+			let kitties = Self::kitties_owned(owner);
+
+			(kitties.len() as u32) >= T::MaxOwned::get()
+		}
+
+		pub fn get_gender(dna: &KittyDna<T>) -> Gender {
+			if dna.as_ref()[0] % 2 == 0 {
 				return Gender::Male
 			}
 
 			Gender::Female
 		}
 
-		pub fn is_kitty_owner(owner: &T::AccountId, dna: &KittyDna) -> Result<bool, Error<T>> {
+		pub fn is_kitty_owner(owner: &T::AccountId, dna: &KittyDna<T>) -> Result<bool, Error<T>> {
 			match Self::kitties(dna) {
 				Some(kitty) => Ok(kitty.owner == *owner),
 				None => Err(<Error<T>>::KittyNoExist),
 			}
 		}
 
-		pub fn mint(owner: &T::AccountId, dna: &KittyDna, price: KittyPrice) -> Result<KittyDna, Error<T>> {
+		pub fn mint(owner: &T::AccountId, price: KittyPrice) -> Result<KittyDna<T>, Error<T>> {
+			let dna = Self::generate_dna();
+			log::info!("A kitty is born with dna: {:?}.", dna);
+			Self::deposit_event(Event::TestHash(dna.as_ref()[0]));
+
 			let kitty = Kitty::<T> {
-				dna: dna.clone(),
-				gender: Self::get_gender(dna),
+				dna: dna,
+				gender: Self::get_gender(&dna),
 				owner: owner.clone(),
-				price: price
+				price: price,
+				created_date: T::Time::now()
 			};
 
 			let new_count = Self::kitty_count().checked_add(1).ok_or(<Error<T>>::KittyCountOverflow)?;
 
-			<KittiesOwned<T>>::mutate(owner, |vec| vec.push(dna.clone()));
+			<KittiesOwned<T>>::try_mutate(owner, |vec| vec.try_push(dna.clone())).map_err(|_| <Error<T>>::ExceedMaxKitty)?;
 
 			<Kitties<T>>::insert(dna, kitty);
 
@@ -165,7 +195,7 @@ pub mod pallet {
 			Ok(dna.clone())
 		}
 
-		pub fn transfer_kitty_to(to: &T::AccountId, dna: &KittyDna) -> Result<(), Error<T>> {
+		pub fn transfer_kitty_to(to: &T::AccountId, dna: &KittyDna<T>) -> Result<(), Error<T>> {
 			let mut kitty = Self::kitties(dna).ok_or(<Error<T>>::KittyNoExist)?;
 
 			let prev_owner = kitty.owner.clone();
@@ -177,13 +207,13 @@ pub mod pallet {
 				}
 
 				Err(())
-			}).map_err(|_| <Error<T>>::KittyNoExist);
+			}).map_err(|_| <Error<T>>::KittyNoExist)?;
 
 			kitty.owner = to.clone();
 
 			<Kitties<T>>::insert(dna, kitty);
 
-			<KittiesOwned<T>>::mutate(to, |vec| vec.push(dna.clone()));
+			<KittiesOwned<T>>::try_mutate(to, |vec| vec.try_push(dna.clone())).map_err(|_| <Error<T>>::ExceedMaxKitty)?;
 
 			Ok(())
 		}
