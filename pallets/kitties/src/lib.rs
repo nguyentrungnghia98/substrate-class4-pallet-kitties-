@@ -18,6 +18,7 @@ mod benchmarking;
 pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_support::traits::{ Randomness, Time, Get };
+	use frame_support::dispatch::fmt;
 	use frame_system::pallet_prelude::*;
 	// use frame_support::inherent::Vec;
 
@@ -28,14 +29,26 @@ pub mod pallet {
 	#[derive(Encode, Decode, Default, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Kitty<T: Config> {
-		dna: KittyDna<T>,
-		owner: T::AccountId,
-		price: KittyPrice,
-		gender: Gender,
-		created_date: MomentOf<T>
+		pub dna: KittyDna<T>,
+		pub owner: T::AccountId,
+		pub price: KittyPrice,
+		pub gender: Gender,
+		pub created_date: MomentOf<T>
 	}
 
-	#[derive(Encode, Decode, TypeInfo)]
+	impl<T: Config> fmt::Debug for Kitty<T> {
+		fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+			f.debug_struct("Kitty")
+			 .field("dna", &self.dna)
+			 .field("owner", &self.owner)
+			 .field("price", &self.price)
+			 .field("gender", &self.gender)
+			 .field("created_date", &self.created_date)
+			 .finish()
+		}
+	}
+
+	#[derive(Encode, Decode, TypeInfo, Debug)]
 	pub enum Gender {
 		Male,
 		Female
@@ -100,7 +113,8 @@ pub mod pallet {
 		TransferToYourself,
 		DnaAlreadyExist,
 		NotKittyOwner,
-		ExceedMaxKitty
+		ExceedMaxKitty,
+		PriceMustGreaterThanZero
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -108,17 +122,17 @@ pub mod pallet {
 	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		// + User có thể tạo kitty
-		// + Có thể chuyển đổi owner của kitty này sang một chủ khác
-		// + Giới tính dựa vào độ dài của dna
-
-		#[pallet::weight(100)]
+		#[pallet::weight(363_600_000 + T::DbWeight::get().reads_writes(4,3))]
 		pub fn create_kitty(origin: OriginFor<T>, price: KittyPrice) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
+			log::info!("MaxOwned: {:?}", T::MaxOwned::get());
+			log::warn!("MaxOwned: {:?}", T::MaxOwned::get());
+			log::error!("MaxOwned: {:?}", T::MaxOwned::get());
+
 			ensure!(!Self::is_exceed_max_kitty(&who), <Error<T>>::ExceedMaxKitty);
 
-			// ensure!(Self::kitties(&dna).is_none(), <Error<T>>::DnaAlreadyExist);
+			ensure!(price >= 0, <Error<T>>::PriceMustGreaterThanZero);
 
 			let dna = Self::mint(&who, price)?;
 
@@ -127,7 +141,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		#[pallet::weight(100)]
+		#[pallet::weight(123_200_000 + T::DbWeight::get().reads_writes(3,3))]
 		pub fn transfer(origin: OriginFor<T>, to: T::AccountId, dna: KittyDna<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
@@ -173,8 +187,6 @@ pub mod pallet {
 
 		pub fn mint(owner: &T::AccountId, price: KittyPrice) -> Result<KittyDna<T>, Error<T>> {
 			let dna = Self::generate_dna();
-			log::info!("A kitty is born with dna: {:?}.", dna);
-			Self::deposit_event(Event::TestHash(dna.as_ref()[0]));
 
 			let kitty = Kitty::<T> {
 				dna: dna,
@@ -183,6 +195,10 @@ pub mod pallet {
 				price: price,
 				created_date: T::Time::now()
 			};
+
+			log::info!("A kitty is born: {:?}", kitty);
+			log::warn!("A kitty is born: {:?}", kitty);
+			log::error!("A kitty is born: {:?}", kitty);
 
 			let new_count = Self::kitty_count().checked_add(1).ok_or(<Error<T>>::KittyCountOverflow)?;
 

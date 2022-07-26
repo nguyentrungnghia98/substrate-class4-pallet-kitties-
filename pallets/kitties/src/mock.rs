@@ -6,7 +6,6 @@ use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
 };
-use frame_support_test::TestRandomness;
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -22,9 +21,9 @@ frame_support::construct_runtime!(
 		UncheckedExtrinsic = UncheckedExtrinsic,
 	{
 		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		KittyModule: pallet_template::{Pallet, Call, Storage, Event<T>},
+		KittyModule: pallet_kitties::{Pallet, Call, Storage, Event<T>},
 		Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent},
-		RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Pallet, Call, Storage, Inherent},
+		RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Pallet, Storage},
 	}
 );
 
@@ -55,7 +54,7 @@ impl system::Config for Test {
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 
-impl pallet_randomness_collective_flip::Config for Runtime {}
+impl pallet_randomness_collective_flip::Config for Test {}
 
 impl pallet_timestamp::Config for Test {
 	type Moment = u64;

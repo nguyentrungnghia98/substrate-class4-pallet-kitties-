@@ -3,18 +3,35 @@
 use super::*;
 
 #[allow(unused)]
-use crate::Pallet as Template;
-use frame_benchmarking::{benchmarks, whitelisted_caller};
+use crate::Pallet as Kitty;
+use frame_benchmarking::{benchmarks, account, whitelisted_caller};
 use frame_system::RawOrigin;
 
+const SEED: u32 = 0;
+
 benchmarks! {
-	do_something {
-		let s in 0 .. 100;
+	create_kitty {
+		let price = u32::MAX;
 		let caller: T::AccountId = whitelisted_caller();
-	}: _(RawOrigin::Signed(caller), s)
+	}: create_kitty(RawOrigin::Signed(caller), price)
 	verify {
-		assert_eq!(Something::<T>::get(), Some(s));
+		assert_eq!(KittyCount::<T>::get(), 1);
 	}
 
-	impl_benchmark_test_suite!(Template, crate::mock::new_test_ext(), crate::mock::Test);
+	transfer {
+		let price = u32::MAX;
+		let caller: T::AccountId = whitelisted_caller();
+		let origin = <T as frame_system::Config>::Origin::from(RawOrigin::Signed(caller.clone()));
+
+		Kitty::<T>::create_kitty(origin, 1).unwrap();
+
+		let kitty_dna = Kitty::<T>::kitties_owned(caller.clone())[0];
+
+		let to_address: T::AccountId = account("to_address", 0, SEED);
+	}: transfer(RawOrigin::Signed(caller), to_address.clone(), kitty_dna.clone())
+	verify {
+		assert!(Kitty::<T>::kitties_owned(to_address).contains(&kitty_dna));
+	}
+
+	impl_benchmark_test_suite!(Kitty, crate::mock::new_test_ext(), crate::mock::Test);
 }
