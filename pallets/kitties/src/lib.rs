@@ -20,6 +20,7 @@ pub mod pallet {
 	use frame_support::traits::{ Randomness, Time, Get };
 	use frame_support::dispatch::fmt;
 	use frame_system::pallet_prelude::*;
+	use sp_runtime::traits::Hash;
 	// use frame_support::inherent::Vec;
 
 	pub type KittyDna<T> = <T as frame_system::Config>::Hash;
@@ -90,6 +91,30 @@ pub mod pallet {
 	#[pallet::getter(fn kitties_owned)]
 	pub type KittiesOwned<T: Config> = StorageMap<_, Twox64Concat, T::AccountId, BoundedVec<KittyDna<T>, T::MaxOwned>, ValueQuery>;
 
+	// Genesis config
+	#[pallet::genesis_config]
+	pub struct GenesisConfig<T:Config> {
+		pub genesis_value: Vec<(T::AccountId, KittyPrice, Option<T::Hash>)>
+	}
+
+	#[cfg(feature="std")]
+	impl<T: Config> Default for GenesisConfig<T> {
+		fn default() -> Self {
+			Self {
+				genesis_value: Vec::new()
+			}
+		}
+	}
+
+	#[pallet::genesis_build]
+	impl<T:Config> GenesisBuild<T> for GenesisConfig<T> {
+		fn build(&self) {
+			for (accountID, price, dna) in &self.genesis_value {
+				<Pallet<T>>::mint(accountID, *price, dna.clone()).unwrap();
+			}
+		}
+	}
+
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/v3/runtime/events-and-errors
 	#[pallet::event]
@@ -134,7 +159,7 @@ pub mod pallet {
 
 			ensure!(price >= 0, <Error<T>>::PriceMustGreaterThanZero);
 
-			let dna = Self::mint(&who, price)?;
+			let dna = Self::mint(&who, price, None)?;
 
 			Self::deposit_event(Event::KittyCreated(who, dna));
 
@@ -161,7 +186,10 @@ pub mod pallet {
 
 	impl<T: Config> Pallet<T> {
 		pub fn generate_dna() -> T::Hash {
-			T::Randomness::random(&b"dna"[..]).0
+			// T::Randomness::random(&b"dna"[..]).0
+			let (seed,_) = T::Randomness::random_seed();
+			let block_number = <frame_system::Pallet<T>>::block_number();
+			T::Hashing::hash_of(&(seed, block_number))
 		}
 
 		pub fn is_exceed_max_kitty(owner: &T::AccountId) -> bool {
@@ -185,12 +213,12 @@ pub mod pallet {
 			}
 		}
 
-		pub fn mint(owner: &T::AccountId, price: KittyPrice) -> Result<KittyDna<T>, Error<T>> {
-			let dna = Self::generate_dna();
+		pub fn mint(owner: &T::AccountId, price: KittyPrice, dna: Option<T::Hash>) -> Result<KittyDna<T>, Error<T>> {
+			let dnaValue = dna.unwrap_or_else(|| Self::generate_dna());
 
 			let kitty = Kitty::<T> {
-				dna: dna,
-				gender: Self::get_gender(&dna),
+				dna: dnaValue.clone(),
+				gender: Self::get_gender(&dnaValue),
 				owner: owner.clone(),
 				price: price,
 				created_date: T::Time::now()
@@ -202,13 +230,13 @@ pub mod pallet {
 
 			let new_count = Self::kitty_count().checked_add(1).ok_or(<Error<T>>::KittyCountOverflow)?;
 
-			<KittiesOwned<T>>::try_mutate(owner, |vec| vec.try_push(dna.clone())).map_err(|_| <Error<T>>::ExceedMaxKitty)?;
+			<KittiesOwned<T>>::try_mutate(owner, |vec| vec.try_push(dnaValue.clone())).map_err(|_| <Error<T>>::ExceedMaxKitty)?;
 
-			<Kitties<T>>::insert(dna, kitty);
+			<Kitties<T>>::insert(dnaValue.clone(), kitty);
 
 			<KittyCount<T>>::put(new_count);
 
-			Ok(dna.clone())
+			Ok(dnaValue.clone())
 		}
 
 		pub fn transfer_kitty_to(to: &T::AccountId, dna: &KittyDna<T>) -> Result<(), Error<T>> {
